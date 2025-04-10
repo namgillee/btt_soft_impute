@@ -1,3 +1,3 @@
-# BTT-SGD
+# BTT-SCD
 
-Block Tensor Train Decomposition for Missing Data Estimation Using Stochastic Gradient Descent
+Block Tensor Train Decomposition for Missing Data Estimation Using Stochastic Coordinate Descent
