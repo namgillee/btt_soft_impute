@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = setuptools.build_meta"
+
+[project]
+name = "btt-scd"
+version = "0.0.1"
+authors = [
+   {name = " Namgil Lee", email = "namgil.lee@kangwon.ac.kr"},
+]
+description = "Block Tensor Train Decomposition for Missing Data Estimation Using Stochastic Gradient Descent"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["numpy==2.2.4",]
+license = "LICENSE"
