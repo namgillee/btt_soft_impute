@@ -1,3 +1,3 @@
-# BTT-SCD
+# btt_soft_impute
 
-Block Tensor Train Decomposition for Missing Data Estimation Using Stochastic Coordinate Descent
+Block tensor train decomposition for missing data estimation using nuclear norm regularization
