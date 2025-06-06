@@ -1,6 +1,6 @@
 [project]
 name = "btt_soft_impute"
-version = "0.2.0"
+version = "0.2.1"
 description = "Block tensor train decomposition for missing data estimation using nuclear norm regularization"
 authors = [
     {name = "Namgil Lee", email = "namgil.lee@kangwon.ac.kr"}
