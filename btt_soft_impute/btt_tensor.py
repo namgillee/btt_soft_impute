@@ -4,8 +4,8 @@ Core fucntions on tensors in Block Tensor-Train (BTT) format
 
 from typing import Optional, Union
 
-import numpy as np
 import tensorly as tl
+from numpy.typing import NDArray
 from tensorly.tt_tensor import TTTensor
 
 
@@ -24,7 +24,7 @@ class BTTTensor(TTTensor):
 
     def __init__(
         self,
-        factors: Union[float, int, list[np.ndarray]],
+        factors: Union[float, int, list[NDArray]],
         block_mode: Optional[int] = None,
         block_size: int = 1,
         inplace: bool = False,
@@ -56,17 +56,46 @@ class BTTTensor(TTTensor):
         message = f"rank-{self.rank} mode-{self.block_mode} btt tensor of shape {self.shape} "
         return message
 
-    def to_tensor(self):
+    def to_tensor(self) -> NDArray:
         return btt_to_tensor(self)
 
-    def to_unfolding(self, mode):
-        return btt_to_unfolded(self, mode)
+    def to_unfolding(self, mode: int = 0) -> NDArray:
+        """Unfolding matrix of a tensor given in BTT format.
 
-    def to_vec(self):
-        return btt_to_mat(self)
+        Parameters
+        ----------
+        btt_tensor: BTTTensor
+            BTTTensor format with N factors representing an (N+1)th order tensor
+            with shape I0 x I1 x ... x I[N-1] x K.
+        mode: int
+            unfolding matrix to be computed along this mode, having values from 0, 1, ..., N.
+
+        Returns
+        -------
+        2-D tensorly.tensor
+            unfolding matrix at mode given by 'mode'
+        """
+        return tl.unfold(self.to_tensor(), mode)
+
+    def to_vec(self) -> NDArray:
+        return tl.tensor_to_vec(self.to_tensor())
+
+    def to_mat(self) -> NDArray:
+        """Long-and-thin matrix defined by the BTT format.
+
+        Parameters
+        ----------
+        btt_tensor: BTTTensor
+
+        Returns
+        -------
+        2-D tensorly.tensor
+            The returned matrix has the shape I x K with I=I0*I1*...*I[N-1].
+        """
+        return tl.reshape(self.to_tensor(), (-1, self.shape[-1]))
 
 
-def btt_to_tensor(btt_tensor: BTTTensor) -> np.ndarray:
+def btt_to_tensor(btt_tensor: BTTTensor) -> NDArray:
     """Returns the full tensor whose BTT decomposition is given by 'factors'
 
     Re-assembles 'factors', which represent a tensor in BTT format
@@ -78,7 +107,7 @@ def btt_to_tensor(btt_tensor: BTTTensor) -> np.ndarray:
 
     Returns
     -------
-    output_tensor : ndarray
+    output_tensor : tensorly.tensor
         (N+1)th order tensor of size I0 x I1 x ... x I[N-1] x K,
         whose BTT cores were given by 'factors'.
     """
@@ -104,40 +133,3 @@ def btt_to_tensor(btt_tensor: BTTTensor) -> np.ndarray:
         full_tensor = tl.transpose(full_tensor, (0, 2, 1))
 
     return tl.reshape(full_tensor, btt_tensor.shape)
-
-
-def btt_to_unfolded(btt_tensor: BTTTensor, mode: int = 0):
-    """Returns the unfolding matrix of a tensor given in BTT (or Tensor-Train) format
-
-    Reassembles a full tensor from 'factors' and returns its unfolding matrix
-    with mode given by 'mode' starting at 0.
-
-    Parameters
-    ----------
-    btt_tensor: BTTTensor
-        BTTTensor format with N factors representing an (N+1)th order tensor.
-    mode: int
-        unfolding matrix to be computed along this mode, having values from 0, 1, ..., N.
-
-    Returns
-    -------
-    2-D array
-        unfolding matrix at mode given by 'mode'
-    """
-    return tl.unfold(btt_to_tensor(btt_tensor), mode)
-
-
-def btt_to_mat(btt_tensor: BTTTensor):
-    """Returns the tensor defined by its BTT format into
-       its matrix format of shape I x K with I=I1*I2*...*IN
-
-    Parameters
-    ----------
-    btt_tensor: BTTTensor
-
-    Returns
-    -------
-    2-D array
-        matricization of BTT tensor into shape I x K with I=I1*I2*...*IN
-    """
-    return tl.reshape(btt_to_tensor(btt_tensor), (-1, btt_tensor.shape[-1]))
