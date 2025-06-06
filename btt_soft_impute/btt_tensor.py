@@ -49,7 +49,7 @@ class BTTTensor(TTTensor):
                 )
 
             shape_prev = [f.shape[1] for f in factors[: self.block_mode]]
-            shape_next = [f.shape[1] for f in factors[self.block_mode + 1, n_factors]]
+            shape_next = [f.shape[1] for f in factors[(self.block_mode + 1) : n_factors]]
             self.shape = tuple([*shape_prev, shape_curr, *shape_next, block_size])
 
     def __repr__(self):
