@@ -2,11 +2,14 @@
 Core functions on tensors in Block Tensor-Train (BTT) format
 """
 
+import logging
 from typing import Optional, Union
 
 import tensorly as tl
 from numpy.typing import NDArray
 from tensorly.tt_tensor import TTTensor
+
+logger = logging.getLogger(__name__)
 
 
 class BTTTensor(TTTensor):
@@ -118,7 +121,7 @@ def btt_to_tensor(btt_tensor: BTTTensor) -> NDArray:
     for factor in btt_tensor:
         rank_prev, rank_next = factor.shape[0], factor.shape[-1]
         factor = tl.reshape(factor, (rank_prev, -1))
-        full_tensor = tl.dot(full_tensor, factor)
+        full_tensor = tl.matmul(full_tensor, factor)
         full_tensor = tl.reshape(full_tensor, (-1, rank_next))
 
     # Shift the block mode to the last mode
@@ -133,3 +136,108 @@ def btt_to_tensor(btt_tensor: BTTTensor) -> NDArray:
         full_tensor = tl.transpose(full_tensor, (0, 2, 1))
 
     return tl.reshape(full_tensor, btt_tensor.shape)
+
+
+def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
+    """Compute the QR factorization of the matrix representation of a BTT tensor.
+
+    The matrix representation of a BTT tensor is of shape I x K with I = I0 * ... * I[N-1].
+    By QR factorization, q is in BTT format and r is an upper-triangular matrix.
+
+    Parameters
+    ----------
+    btt_tensor : BTTTensor
+
+    Returns
+    -------
+    q_tensor : BTTTensor
+        A BTT tensor of the same shape and ranks as the input BTT tensor,
+        with orthogonalized core tensors.
+    r_matrix: NDArray
+    """
+    block_mode = btt_tensor.block_mode
+    block_size = btt_tensor.shape[-1]
+    n_cores = len(btt_tensor)
+    ranks = btt_tensor.rank
+    shapes = btt_tensor.shape
+
+    # Left-to-right orthogonalization
+    n = 0
+    while n < block_mode:
+        cr = btt_tensor.factors[n]
+        cr = tl.reshape(cr, (ranks[n] * shapes[n], ranks[n + 1]))
+
+        # Compute QR decomposition
+        cr, crr = tl.qr(cr)
+
+        # Update TT-rank
+        ranks[n + 1] = crr.shape[0]
+
+        # Update current core
+        cr = tl.reshape(cr, (ranks[n], shapes[n], ranks[n + 1]))
+        btt_tensor.factors[n] = cr
+
+        # Multiply crr to the next core
+        cr2 = btt_tensor.factors[n + 1]
+        sz2 = cr2.shape
+        cr2 = tl.reshape(cr2, (sz2[0], -1))
+        cr2 = tl.matmul(crr, cr2)
+        cr2 = tl.reshape(cr2, (ranks[n + 1], *sz2[1:]))
+        btt_tensor.factors[n + 1] = cr2
+
+        n = n + 1
+
+    # Right-to-left orthogonalization
+    n = n_cores - 1
+    while n > block_mode:
+        cr = btt_tensor.factors[n]
+        cr = tl.reshape(cr, (ranks[n], shapes[n] * ranks[n + 1]))
+        cr = tl.transpose(cr)
+
+        # Compute QR decomposition
+        cr, crr = tl.qr(cr)
+
+        # Update TT-rank
+        ranks[n] = crr.shape[0]
+
+        # Update current core
+        cr = tl.transpose(cr)
+        cr = tl.reshape(cr, (ranks[n], shapes[n], ranks[n + 1]))
+        btt_tensor.factors[n] = cr
+
+        # Multiply crr to the next core
+        cr2 = btt_tensor.factors[n - 1]
+        sz2 = cr2.shape
+        cr2 = tl.reshape(cr2, (-1, sz2[-1]))
+        cr2 = tl.matmul(cr2, tl.transpose(crr))
+        cr2 = tl.reshape(cr2, (*sz2[:-1], ranks[n]))
+        btt_tensor.factors[n - 1] = cr2
+
+        n = n - 1
+
+    # Orthogonalize block_mode'th TT-core
+    cr = btt_tensor.factors[block_mode]
+    cr = tl.reshape(cr, (ranks[block_mode] * shapes[block_mode], block_size, ranks[block_mode + 1]))
+    cr = tl.transpose(cr, (0, 2, 1))
+    cr = tl.reshape(
+        cr, (ranks[block_mode] * shapes[block_mode] * ranks[block_mode + 1], block_size)
+    )
+
+    cr, crr = tl.qr(cr)
+
+    # Update block_size
+    if block_size != crr.shape[0]:
+        logger.warning("Block size will be changed")
+    block_size = crr.shape[0]
+
+    # Update current core
+    cr = tl.reshape(cr, (ranks[block_mode], shapes[block_mode], ranks[block_mode + 1], block_size))
+    cr = tl.transpose(cr, (0, 1, 3, 2))
+    cr = tl.reshape(cr, (ranks[block_mode], shapes[block_mode] * block_size, ranks[block_mode + 1]))
+    btt_tensor.factors[block_mode] = cr
+
+    # Update BTT tensor
+    btt_tensor.shape[-1] = block_size
+    btt_tensor.rank = ranks
+
+    return btt_tensor, crr
