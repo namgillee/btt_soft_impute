@@ -1,5 +1,5 @@
 """
-Core fucntions on tensors in Block Tensor-Train (BTT) format
+Core functions on tensors in Block Tensor-Train (BTT) format
 """
 
 from typing import Optional, Union
@@ -15,11 +15,11 @@ class BTTTensor(TTTensor):
     by a list of N factors, G0, G1, ..., G[N-1].
 
     All factors are 3rd order tensors.
-    Only one factor, Gm, is of shape Rm x Im*K x R[m+1], and
+    Only one factor, Gm, is of shape Rm x (Im * K) x R[m+1], and
     the rest, Gn, are of shape Rn x In x R[n+1].
-    BTT-block_mode, m, is normally set at m = N-1.
-    BTT-rank is a tuple of R0, R1, ..., RN, and
-    BTT-shape is a tuple of I0, I1, xxx, I[N-1], K.
+    BTT-block_mode, m, is usually set at m = N-1 by default.
+    BTT-rank is a tuple of R0, R1, ..., RN, with R0=RN=1, and
+    BTT-shape is a tuple of I0, I1, ..., I[N-1], K.
     """
 
     def __init__(
