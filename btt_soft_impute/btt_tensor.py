@@ -141,8 +141,9 @@ def btt_to_tensor(btt_tensor: BTTTensor) -> NDArray:
 def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
     """Compute the QR factorization of the matrix representation of a BTT tensor.
 
-    The matrix representation of a BTT tensor is of shape I x K with I = I0 * ... * I[N-1].
-    By QR factorization, q is in BTT format and r is an upper-triangular matrix.
+    The matrix representation of a BTT tensor is considered of shape I x K with
+    I = I0 * ... * I[N-1]. By QR factorization, the q is a BTT tensor and r is an
+    upper-triangular matrix.
 
     Parameters
     ----------
@@ -150,10 +151,11 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
 
     Returns
     -------
-    q_tensor : BTTTensor
-        A BTT tensor of the same shape and ranks as the input BTT tensor,
+    btt_tensor : BTTTensor
+        The QR Q matrix in BTT format, having the same shape and ranks as the input BTT tensor,
         with orthogonalized core tensors.
-    r_matrix: NDArray
+    crr: NDArray
+        The QR R matrix.
     """
     block_mode = btt_tensor.block_mode
     block_size = btt_tensor.shape[-1]
@@ -241,3 +243,189 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
     btt_tensor.rank = ranks
 
     return btt_tensor, crr
+
+
+def tt_dot_left(tt1: TTTensor, tt2: TTTensor, current_mode: int = 0) -> NDArray:
+    """Partial dot product of two TT tensors, between core tensors on the left of current mode.
+
+    It returns a matrix of size R1[n] x R2[n], where n denotes the current mode.
+
+    Parameters
+    ----------
+    tt1 : TTTensor
+    tt2 : TTTensor
+    current_mode : int
+        Integer among 0, ..., N-1
+
+    Returns
+    -------
+    prod : NDArray
+        Partial dot product of tt1 and tt2 core tensors on the left of current mode.
+        Matrix of size R1[n] x R2[n]
+    """
+    n_cores = len(tt1)
+    current_mode = min(n_cores, current_mode)
+
+    shapes = tt1.shape
+    if shapes[:current_mode] != tt2.shape[:current_mode]:
+        logger.warning("Sizes of two input TT tensors must be equal but they are different.")
+        return tl.ones(shape=(1, 1))
+
+    ranks1 = tt1.rank
+    ranks2 = tt2.rank
+    if ranks1[0] != 1 or ranks2[0] != 1:
+        logger.warning("The first TT rank must be 1 but it is not.")
+        return tl.ones(shape=(1, 1))
+
+    prod = tl.ones(shape=(1, 1))
+    for n in tl.arange(current_mode):
+        cr1 = tt1.factors[n]
+        cr2 = tt2.factors[n]
+
+        # Multiply tt2 core
+        cr2 = tl.reshape(cr2, (ranks2[n], shapes[n] * ranks2[n + 1]))
+        prod = tl.matmul(prod, cr2)  # size r1n, In * r2+
+        prod = tl.reshape(prod, (ranks1[n] * shapes[n], ranks2[n + 1]))
+
+        # Multiply tt1 core
+        cr1 = tl.reshape(cr1, (ranks1[n] * shapes[n], ranks1[n + 1]))
+        prod = tl.matmul(tl.transpose(tl.conj(cr1)), prod)  # size r1+, r2+
+
+    return prod
+
+
+def tt_dot_right(tt1: TTTensor, tt2: TTTensor, current_mode: int = 0) -> NDArray:
+    """Partial dot product of two TT tensors, between core tensors on the right of current mode.
+
+    It returns a matrix of size R1[n + 1] x R2[n + 1], where n denotes the current mode.
+
+    Parameters
+    ----------
+    tt1 : TTTensor
+    tt2 : TTTensor
+    current_mode : int
+        Integer among 0, ..., N-1
+
+    Returns
+    -------
+    prod : NDArray
+        Partial dot product of tt1 and tt2 core tensors on the right of current mode.
+        Matrix of size R1[n + 1] x R2[n + 1]
+    """
+    current_mode = max(-1, current_mode)
+
+    shapes = tt1.shape
+    if shapes[(current_mode + 1) :] != tt2.shape[(current_mode + 1) :]:
+        logger.warning("Sizes of two input TT tensors must be equal but they are different.")
+        return tl.ones(shape=(1, 1))
+
+    ranks1 = tt1.rank
+    ranks2 = tt2.rank
+    n_cores = len(tt1)
+    if ranks1[n_cores] != 1 or ranks2[n_cores] != 1:
+        logger.warning("The last TT rank must be 1 but it is not.")
+        return tl.ones(shape=(1, 1))
+
+    prod = tl.ones(shape=(1, 1))
+    for n in tl.arange(n_cores - 1, current_mode, -1):
+        cr1 = tt1.factors[n]
+        cr2 = tt2.factors[n]
+
+        # Multiply tt1 core
+        cr1 = tl.reshape(cr1, (ranks1[n] * shapes[n], ranks1[n + 1]))
+        prod = tl.matmul(tl.conj(cr1), prod)
+        prod = tl.reshape(prod, (ranks1[n], shapes[n] * ranks2[n + 1]))
+
+        # Multiply tt2 core
+        cr2 = tl.reshape(cr2, (ranks2[n], shapes[n] * ranks2[n + 1]))
+        prod = tl.matmul(prod, tl.transpose(cr2))  # size r1n, r2n
+
+    return prod
+
+
+# pylint: disable=too-many-locals
+def btt_dot(tt1: BTTTensor, tt2: BTTTensor, do_qr: bool = False) -> NDArray:
+    """Dot product of two BTT tensors
+
+    It returns a matrix of size K(tt1) x K(tt2),
+    where K(tt) denotes the block size of a BTT tensor tt.
+
+    Parameters
+    ----------
+    tt1 : BTTTensor
+    tt2 : BTTTensor
+    do_qr : bool
+        If True, run QR factorization on tt1 and tt2, respectively.
+
+    Returns
+    -------
+    prod : NDArray
+        Dot product of tt1 and tt2. The matrix size is K(tt1) x K(tt2).
+    """
+    shapes = tt1.shape
+    if shapes[:-1] != tt2.shape[:-1]:
+        logger.warning("Sizes of two input TT tensors must be equal but they are different.")
+        return tl.tensor(0.0)
+
+    ranks1 = tt1.rank
+    ranks2 = tt2.rank
+
+    if do_qr:
+        tt1, qrr1 = btt_qr(tt1)
+        tt2, qrr2 = btt_qr(tt2)
+
+    min_mode = min(tt1.block_mode, tt2.block_mode)
+    max_mode = max(tt1.block_mode, tt2.block_mode)
+    prod = tt_dot_left(tt1, tt2, current_mode=min_mode)
+    prod_right = tt_dot_right(tt1, tt2, current_mode=max_mode)
+
+    # Partial dot product of cores between tt1 and tt2, within min_mode and max_mode
+    k10 = 1
+    k20 = 1
+    for n in tl.arange(min_mode, max_mode + 1):
+        cr1 = tt1.factors[n]
+        cr2 = tt2.factors[n]
+
+        k1n = tt1.shape[-1] if n == tt1.block_mode else 1
+        k2n = tt2.shape[-1] if n == tt2.block_mode else 1
+
+        # Multiply tt2 core
+        cr2 = tl.reshape(cr2, (ranks2[n], shapes[n] * k2n * ranks2[n + 1]))
+        prod = tl.matmul(prod, cr2)  # size k10 * k20 * r1n, In * k2n * r2+
+        prod = tl.reshape(prod, (k10 * k20 * ranks1[n] * shapes[n], k2n * ranks2[n + 1]))
+        prod = tl.transpose(prod)
+        prod = tl.reshape(prod, (k2n * ranks2[n + 1] * k10 * k20, ranks1[n] * shapes[n]))
+
+        # Multiply tt1 core
+        cr1 = tl.reshape(cr1, (ranks1[n] * shapes[n], k1n * ranks1[n + 1]))
+        prod = tl.matmul(prod, tl.conj(cr1))  # size k2n * r2+ * k10 * k20, k1n * r1+
+
+        # Reshape for the next iteration
+        if n not in (tt1.block_mode, tt2.block_mode):
+            prod = tl.reshape(prod, (ranks2[n + 1], k10 * k20 * ranks1[n + 1]))
+            prod = tl.transpose(prod)
+        elif n == tt1.block_mode and n != tt2.block_mode:
+            prod = tl.reshape(prod, (ranks2[n + 1], k10, k20, k1n, ranks1[n + 1]))
+            prod = tl.transpose(prod, (1, 3, 2, 4, 0))
+            prod = tl.reshape(prod, (k10 * k1n * k20 * ranks1[n + 1], ranks2[n + 1]))
+        elif n != tt1.block_mode and n == tt2.block_mode:
+            prod = tl.reshape(prod, (k2n, ranks2[n + 1], k10 * k20, ranks1[n + 1]))
+            prod = tl.transpose(prod, (2, 0, 3, 1))
+            prod = tl.reshape(prod, (k10 * k20 * k2n * ranks1[n + 1], ranks2[n + 1]))
+        else:
+            prod = tl.reshape(prod, (k2n, ranks2[n + 1], k10, k20, k1n, ranks1[n + 1]))
+            prod = tl.transpose(prod, (2, 4, 3, 0, 5, 1))
+            prod = tl.reshape(prod, (k10 * k1n * k20 * k2n * ranks1[n + 1], ranks2[n + 1]))
+
+        k10 = k10 * k1n
+        k20 = k20 * k2n
+
+    # Multiply prod_right
+    prod = tl.reshape(prod, (k10 * k20, ranks1[max_mode + 1] * ranks2[max_mode + 1]))
+    prod = tl.matmul(prod, tl.reshape(prod_right, (-1, 1)))
+    prod = tl.reshape(prod, (k10, k20))
+
+    if do_qr:
+        prod = tl.matmul(tl.transpose(qrr1), tl.matmul(prod, qrr2))
+
+    return prod
