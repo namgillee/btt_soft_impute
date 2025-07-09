@@ -35,3 +35,13 @@ def test_btttensor():
     )
     assert tl.all(btt_tensor.to_vec() == tl.reshape(targ_tensor, (-1,)))
     assert tl.all(btt_tensor.to_mat() == tl.reshape(targ_tensor, (-1, 3)))
+
+
+def test_btt_dot():
+    """Test btt_dot"""
+    factors = [tl.tensor([[[1.0], [2.0]]]), tl.tensor([[[1.0], [1.0], [1.0], [2.0], [3.0], [4.0]]])]
+    btt_tensor = btt.BTTTensor(factors, block_size=3)
+
+    desired_result = tl.tensor([[25.0, 35.0, 45.0], [35.0, 50.0, 65.0], [45.0, 65.0, 85.0]])
+
+    assert tl.all(btt.btt_dot(btt_tensor, btt_tensor) == desired_result)
