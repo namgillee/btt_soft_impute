@@ -56,7 +56,7 @@ class BTTTensor(TTTensor):
             self.shape = tuple([*shape_prev, shape_curr, *shape_next, block_size])
 
     def __repr__(self):
-        message = f"rank-{self.rank} mode-{self.block_mode} btt tensor of shape {self.shape} "
+        message = f"rank-{self.rank} btt-{self.block_mode} tensor of shape {self.shape} "
         return message
 
     def to_tensor(self) -> NDArray:
@@ -157,15 +157,15 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
     crr: NDArray
         The QR R matrix.
     """
+    ranks = list(btt_tensor.rank)
+    shapes = list(btt_tensor.shape)
     block_mode = btt_tensor.block_mode
-    block_size = btt_tensor.shape[-1]
+    block_size = shapes[-1]
     n_cores = len(btt_tensor)
-    ranks = btt_tensor.rank
-    shapes = btt_tensor.shape
 
     # Left-to-right orthogonalization
     n = 0
-    while n < block_mode:
+    for n in tl.arange(block_mode):
         cr = btt_tensor.factors[n]
         cr = tl.reshape(cr, (ranks[n] * shapes[n], ranks[n + 1]))
 
@@ -187,11 +187,8 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
         cr2 = tl.reshape(cr2, (ranks[n + 1], *sz2[1:]))
         btt_tensor.factors[n + 1] = cr2
 
-        n = n + 1
-
     # Right-to-left orthogonalization
-    n = n_cores - 1
-    while n > block_mode:
+    for n in tl.arange(n_cores - 1, block_mode, -1):
         cr = btt_tensor.factors[n]
         cr = tl.reshape(cr, (ranks[n], shapes[n] * ranks[n + 1]))
         cr = tl.transpose(cr)
@@ -215,8 +212,6 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
         cr2 = tl.reshape(cr2, (*sz2[:-1], ranks[n]))
         btt_tensor.factors[n - 1] = cr2
 
-        n = n - 1
-
     # Orthogonalize block_mode'th TT-core
     cr = btt_tensor.factors[block_mode]
     cr = tl.reshape(cr, (ranks[block_mode] * shapes[block_mode], block_size, ranks[block_mode + 1]))
@@ -239,8 +234,9 @@ def btt_qr(btt_tensor: BTTTensor) -> tuple[BTTTensor, NDArray]:
     btt_tensor.factors[block_mode] = cr
 
     # Update BTT tensor
-    btt_tensor.shape[-1] = block_size
-    btt_tensor.rank = ranks
+    shapes[-1] = block_size
+    btt_tensor.shape = tuple(shapes)
+    btt_tensor.rank = tuple(ranks)
 
     return btt_tensor, crr
 
@@ -429,3 +425,75 @@ def btt_dot(tt1: BTTTensor, tt2: BTTTensor, do_qr: bool = False) -> NDArray:
         prod = tl.matmul(tl.transpose(qrr1), tl.matmul(prod, qrr2))
 
     return prod
+
+
+def btt_rand(
+    shape: tuple[int],
+    rank: tuple[int],
+    block_mode: Optional[int] = None,
+    random_state: Optional[int] = None,
+) -> BTTTensor:
+    """Generate a BTT tensor randomly, whose matrix representation has
+    orthonormal columns.
+
+    Entries of core tensors are generated from the standard normal distribution,
+    then each core tensor is orthogonalized by qr factorization, so that
+    the BTT matrix representation has orthonormal columns.
+
+    Parameters
+    ----------
+    shape : tuple of length N + 1.
+        The first N integers are the mode sizes, and the last integer is the block size.
+    rank : tuple of length N + 1.
+        It defines the TT-ranks R[0],...,R[N] with R[0] = R[N] = 1.
+    block_mode : int
+        The mode where the block mode is located. It should be among 0, 1, ..., N-1.
+    random_state : np.random.RandomState
+
+    Returns
+    -------
+    btt_tensor : BTTTensor
+        A random BTT tensor whose matrix representation has orthonormal columns.
+    """
+    # Check input length
+    if len(shape) != len(rank):
+        logger.warning(
+            "The shape and rank must have the same numbers of integers, but they do not."
+        )
+        return BTTTensor([tl.tensor([[[0.0]]])], block_mode=0, block_size=1)
+
+    n_cores = len(shape) - 1
+
+    # Check boundary conditions
+    if rank[0] != 1 or rank[n_cores] != 1:
+        logger.warning(
+            "The first and the last BTT ranks must be equal to 1, but they are not. Resetting."
+        )
+        rank = (1, *rank[1:-1], 1)
+
+    # Check block_mode
+    block_mode = n_cores - 1 if block_mode is None else block_mode
+    if block_mode < 0 or block_mode > n_cores - 1:
+        logger.warning("The block_mode is out of feasible range. Resetting.")
+        block_mode = n_cores - 1
+
+    # Check random state
+    rns = tl.check_random_state(random_state)
+
+    # Initialize cores
+    block_size = shape[n_cores]
+    factors = [
+        (
+            tl.tensor(rns.standard_normal((rank[n], shape[n], rank[n + 1])))
+            if n != block_mode
+            else tl.tensor(rns.standard_normal((rank[n], shape[n] * block_size, rank[n + 1])))
+        )
+        for n in tl.arange(n_cores)
+    ]
+
+    btt_tensor = BTTTensor(factors, block_mode=block_mode, block_size=block_size)
+
+    # Orthogonalize cores
+    btt_tensor, _ = btt_qr(btt_tensor)
+
+    return btt_tensor
