@@ -45,3 +45,13 @@ def test_btt_dot():
     desired_result = tl.tensor([[25.0, 35.0, 45.0], [35.0, 50.0, 65.0], [45.0, 65.0, 85.0]])
 
     assert tl.all(btt.btt_dot(btt_tensor, btt_tensor) == desired_result)
+
+
+def test_btt_rand():
+    """Test btt_rand"""
+    btt_tensor = btt.btt_rand((2, 2, 3), (1, 3, 1))
+
+    assert btt_tensor.block_mode == 1
+    assert btt_tensor.shape == (2, 2, 3)
+    assert btt_tensor.rank == (1, 2, 1)
+    assert tl.max(tl.abs(btt.btt_dot(btt_tensor, btt_tensor) - tl.eye(3))) < 1e-10
